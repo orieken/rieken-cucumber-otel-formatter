@@ -1,0 +1,5 @@
+{
+  "otelServiceUrl": "http://localhost:50052/v1/traces",
+  "prometheusMetricsUrl": "http://localhost:50080/metrics",
+  "serviceName": "CucumberOtelTestService"
+}

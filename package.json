@@ -1,0 +1,50 @@
+{
+  "name": "@rieken/cucumber-otel-reporter",
+  "version": "0.1.0",
+  "description": "OpenTelemetry formatter for CucumberJS",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -fr ./dist && tsc",
+    "prepublishOnly": "npm run build",
+    "test": "cucumber-js",
+    "clean": "rm -rf dist",
+    "watch": "tsc --watch",
+    "lint": "eslint 'src/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' --fix",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@cucumber/messages": "^24.0.1",
+    "@opentelemetry/api": "^1.7.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.54.0",
+    "@opentelemetry/resources": "^1.21.0",
+    "@opentelemetry/sdk-trace-base": "^1.21.0",
+    "@opentelemetry/sdk-trace-node": "^1.21.0",
+    "@opentelemetry/semantic-conventions": "^1.21.0"
+  },
+  "peerDependencies": {
+    "@cucumber/cucumber": "^10.0.0"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^11.0.1",
+    "@types/node": "^20.17.3",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "cucumber-formatter",
+    "opentelemetry",
+    "cucumber",
+    "testing",
+    "observability"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
