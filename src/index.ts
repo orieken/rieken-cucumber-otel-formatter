@@ -95,18 +95,18 @@ export default class OtelFormatter extends SummaryFormatter {
     // Initialize OpenTelemetry
     this.provider = new NodeTracerProvider({
       resource: new Resource({
-        [SemanticResourceAttributes.SERVICE_NAME]: 'cucumber-tests',
-        [SemanticResourceAttributes.SERVICE_VERSION]: '1.0.0',
-        [SemanticResourceAttributes.SERVICE_NAMESPACE]: 'testing',
-        [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: process.env.NODE_ENV || 'development'
+        [SemanticResourceAttributes.SERVICE_NAME]: process.env.OTEL_SERVICE_NAME,
+        [SemanticResourceAttributes.SERVICE_VERSION]: process.env.OTEL_SERVICE_VERSION,
+        [SemanticResourceAttributes.SERVICE_NAMESPACE]: process.env.OTEL_SERVICE_NAMESPACE,
+        [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: process.env.NODE_ENV || process.env.OTEL_DEFAULT_ENVIRONMENT
       }),
     })
 
     // Configure OTLP exporter
     const otlpExporter = new OTLPTraceExporter({
-      url: 'http://localhost:50052/v1/traces',
+      url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
       headers: {},
-      timeoutMillis: 15000,
+      timeoutMillis: parseInt(process.env.OTEL_EXPORTER_OTLP_TIMEOUT || '15000'),
     })
 
     // Add SpanProcessor to the provider
@@ -116,7 +116,7 @@ export default class OtelFormatter extends SummaryFormatter {
     this.provider.register()
 
     // Get a tracer
-    this.tracer = trace.getTracer('cucumber-tests')
+    this.tracer = trace.getTracer(process.env.OTEL_SERVICE_NAME || 'cucumber-tests')
 
     options.eventBroadcaster.on('envelope', this.parseEnvelope.bind(this))
   }
@@ -131,7 +131,6 @@ export default class OtelFormatter extends SummaryFormatter {
       this.onTestCaseFinished(envelope.testCaseFinished)
     if (envelope.testRunFinished) this.onTestRunFinished(envelope.testRunFinished)
   }
-
 
   private onTestRunStarted(testRunStarted: messages.TestRunStarted): void {
     const span = this.tracer.startSpan('test-run')
@@ -269,7 +268,8 @@ export default class OtelFormatter extends SummaryFormatter {
     testRunContext?.end()
 
     // Output the final test run data
-    this.log(JSON.stringify(this.currentTestRun, null, 2))
+    const jsonSpacing = 2
+    this.log(JSON.stringify(this.currentTestRun, null, jsonSpacing))
     this.log(n)
   }
 

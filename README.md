@@ -1,7 +1,7 @@
-# @rieken/cucumber-otel-formatter
+# @orieken/cucumber-otel-formatter
 
 
-`@rieken/cucumber-otel-reporter` is a custom CucumberJS reporter built in TypeScript to enhance test observability by sending test results as both tracing data and metrics directly to OpenTelemetry and Prometheus. This reporter captures information for each test scenario and sends it to pre-configured OTLP and Prometheus endpoints, allowing for real-time monitoring of test success rates, durations, and failures.
+`@orieken/cucumber-otel-reporter` is a custom CucumberJS reporter built in TypeScript to enhance test observability by sending test results as both tracing data and metrics directly to OpenTelemetry and Prometheus. This reporter captures information for each test scenario and sends it to pre-configured OTLP and Prometheus endpoints, allowing for real-time monitoring of test success rates, durations, and failures.
 
 ## Features
 
@@ -12,7 +12,7 @@
 ## Installation
 
 \`\`\`bash
-npm install @rieken/cucumber-otel-reporter
+npm install @orieken/cucumber-otel-reporter
 \`\`\`
 
 ## Configuration
@@ -38,7 +38,7 @@ Create a JSON configuration file (e.g., \`otel-config.json\`) with the required 
 Run CucumberJS with the custom formatter and point it to the configuration file:
 
 \`\`\`bash
-npx cucumber-js --require-module ts-node/register --format @rieken/cucumber-otel-reporter ./path/to/otel-config.json
+npx cucumber-js --require-module ts-node/register --format @orieken/cucumber-otel-reporter ./path/to/otel-config.json
 \`\`\`
 
 ### Metrics Exposed
