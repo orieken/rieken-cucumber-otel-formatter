@@ -1,5 +1,5 @@
 {
-  "name": "@rieken/cucumber-otel-reporter",
+  "name": "@orieken/cucumber-otel-reporter",
   "version": "0.1.0",
   "description": "OpenTelemetry formatter for CucumberJS",
   "main": "dist/index.js",
