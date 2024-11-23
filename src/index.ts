@@ -1,5 +1,4 @@
 import {
-  Status,
   SummaryFormatter,
   IFormatterOptions,
   formatterHelpers,
@@ -12,9 +11,9 @@ import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { Resource } from '@opentelemetry/resources';
-
-const { formatLocation, GherkinDocumentParser, PickleParser } = formatterHelpers
-const { getGherkinExampleRuleMap, getGherkinScenarioMap, getGherkinStepMap } =
+import { TestStepResult, TestStepResultStatus } from '@cucumber/messages';
+const { GherkinDocumentParser, PickleParser } = formatterHelpers
+const { getGherkinScenarioMap, getGherkinStepMap } =
   GherkinDocumentParser
 const { getPickleStepMap } = PickleParser
 
@@ -27,6 +26,7 @@ class CurrentStep {
   duration?: messages.Duration
   error?: string
   file: string
+  context?: Context
 
   constructor(
     name: string,
@@ -48,8 +48,8 @@ class CurrentScenario {
   line: number
   file: string
   steps: CurrentStep[] = []
-  status?: messages.TestStepResultStatus
-  duration?: messages.Duration
+  status?: TestStepResultStatus
+  duration?: TestStepResult
   context?: Context
 
   constructor(name: string, line: number, file: string) {
@@ -133,9 +133,14 @@ export default class OtelFormatter extends SummaryFormatter {
   }
 
   private onTestRunStarted(testRunStarted: messages.TestRunStarted): void {
-    const span = this.tracer.startSpan('test-run')
-    this.currentTestRun.context = trace.setSpan(context.active(), span)
-    this.currentTestRun.startTime = testRunStarted.timestamp
+    const rootSpan = this.tracer.startSpan('test-run', {
+      attributes: {
+        'test.type': 'test-run',
+        'test.status': 'started'
+      }
+    });
+    this.currentTestRun.context = trace.setSpan(context.active(), rootSpan);
+    this.currentTestRun.startTime = testRunStarted.timestamp;
   }
 
   private onTestCaseStarted(testCaseStarted: messages.TestCaseStarted): void {
@@ -146,25 +151,6 @@ export default class OtelFormatter extends SummaryFormatter {
       throw new Error('Feature is missing from gherkin document')
     }
 
-    if (this.uri !== gherkinDocument.uri) {
-      this.uri = gherkinDocument.uri || ''
-      this.currentFeature = new CurrentFeature(
-        gherkinDocument.feature.name,
-        gherkinDocument.feature.location.line,
-        this.uri
-      )
-
-      // Create feature span
-      const featureSpan = this.tracer.startSpan(
-        `feature: ${ this.currentFeature.name }`,
-        undefined,
-        this.currentTestRun.context
-      )
-      this.currentFeature.context = trace.setSpan(context.active(), featureSpan)
-
-      this.currentTestRun.features.push(this.currentFeature)
-    }
-
     const gherkinScenarioMap = getGherkinScenarioMap(gherkinDocument)
     if (!pickle.astNodeIds) throw new Error('Pickle AST nodes missing')
     const scenario = gherkinScenarioMap[pickle.astNodeIds[0]]
@@ -172,14 +158,21 @@ export default class OtelFormatter extends SummaryFormatter {
     this.currentScenario = new CurrentScenario(
       pickle.name,
       scenario.location.line,
-      this.uri as string
+      this.uri || ''
     )
 
-    // Create scenario span
+    // Create scenario span as child of test run
     const scenarioSpan = this.tracer.startSpan(
       `scenario: ${this.currentScenario.name}`,
-      undefined,
-      this.currentFeature?.context
+      {
+        attributes: {
+          'test.type': 'scenario',
+          'test.scenario.name': this.currentScenario.name,
+          'test.scenario.line': this.currentScenario.line,
+          'test.scenario.file': this.currentScenario.file
+        }
+      },
+      this.currentTestRun.context // Use test run context as parent
     )
     this.currentScenario.context = trace.setSpan(context.active(), scenarioSpan)
 
@@ -200,29 +193,36 @@ export default class OtelFormatter extends SummaryFormatter {
       (item) => item.id === testStepStarted.testStepId
     )
 
-    if (testStep && testStep.pickleStepId) {
+    if (testStep && testStep.pickleStepId && this.currentScenario) {
       const pickleStep = pickleStepMap[testStep.pickleStepId]
       const astNodeId = pickleStep.astNodeIds[0]
       const gherkinStep = gherkinStepMap[astNodeId]
 
-      if (this.currentScenario) {
-        const step = new CurrentStep(
-          `${gherkinStep.keyword}${pickleStep.text}`,
-          gherkinStep.keyword,
-          pickleStep.text,
-          gherkinStep.location.line,
-          this.uri || ''
-        )
+      const step = new CurrentStep(
+        `${gherkinStep.keyword}${pickleStep.text}`,
+        gherkinStep.keyword,
+        pickleStep.text,
+        gherkinStep.location.line,
+        this.uri || ''
+      )
 
-        // Create step span
-        this.tracer.startSpan(
-          `step: ${step.name}`,
-          undefined,
-          this.currentScenario.context
-        )
-
-        this.currentScenario.steps.push(step)
-      }
+      // Create step span as child of scenario
+      const stepSpan = this.tracer.startSpan(
+        `step: ${step.name}`,
+        {
+          attributes: {
+            'test.type': 'step',
+            'test.step.name': step.name,
+            'test.step.keyword': step.keyword,
+            'test.step.text': step.text,
+            'test.step.line': step.line,
+            'test.step.file': step.file
+          }
+        },
+        this.currentScenario.context // Use scenario context as parent
+      )
+      step.context = trace.setSpan(context.active(), stepSpan)
+      this.currentScenario.steps.push(step)
     }
   }
 
@@ -232,14 +232,23 @@ export default class OtelFormatter extends SummaryFormatter {
         this.currentScenario.steps[this.currentScenario.steps.length - 1]
       currentStep.status = testStepFinished.testStepResult.status
       currentStep.duration = testStepFinished.testStepResult.duration
+
       if (testStepFinished.testStepResult.message) {
         currentStep.error = testStepFinished.testStepResult.message
       }
 
       // End step span
-      const stepContext = trace.getSpan(this.currentScenario.context!)
-      stepContext?.setAttribute('status', this.mapStatus(testStepFinished.testStepResult.status))
-      stepContext?.end();
+      if (currentStep.context) {
+        const stepSpan = trace.getSpan(currentStep.context)
+        if (stepSpan) {
+          stepSpan.setAttributes({
+            'test.step.status': this.mapStatus(testStepFinished.testStepResult.status),
+            'test.step.duration.seconds': testStepFinished.testStepResult.duration?.seconds || 0,
+            'test.step.error': testStepFinished.testStepResult.message || ''
+          })
+          stepSpan.end()
+        }
+      }
     }
   }
 
@@ -247,9 +256,29 @@ export default class OtelFormatter extends SummaryFormatter {
     const testCaseAttempt = this.eventDataCollector.getTestCaseAttempt(
       testCaseFinished.testCaseStartedId
     )
+
     if (this.currentScenario) {
-      this.currentScenario.status = testCaseAttempt.worstTestStepResult as unknown as messages.TestStepResultStatus
-      this.currentScenario.duration = testCaseFinished.timestamp
+      // Update scenario status and duration
+      if (testCaseAttempt.stepResults) {
+        this.currentScenario.status = testCaseAttempt.stepResults.status as unknown as messages.TestStepResultStatus;
+        this.currentScenario.duration = testCaseAttempt.stepResults.duration;
+      }
+
+      // End scenario span
+      const scenarioContext = this.currentScenario.context
+      if (scenarioContext) {
+        const scenarioSpan = trace.getSpan(scenarioContext)
+        if (scenarioSpan && testCaseAttempt.stepResults) {
+          scenarioSpan.setAttributes({
+            'test.scenario.status': this.mapStatus(testCaseAttempt.worstTestStepResult as unknown as TestStepResultStatus),
+            'test.scenario.duration.seconds': (testCaseAttempt.stepResults.duration || 0) as unknown as number,
+            'test.scenario.name': this.currentScenario.name,
+            'test.scenario.file': this.currentScenario.file,
+            'test.scenario.line': this.currentScenario.line
+          })
+          scenarioSpan.end()
+        }
+      }
     }
   }
 
@@ -257,19 +286,21 @@ export default class OtelFormatter extends SummaryFormatter {
     this.currentTestRun.endTime = testRunFinished.timestamp
     this.currentTestRun.success = testRunFinished.success
 
-    // End feature span if exists
-    if (this.currentFeature?.context) {
-      const featureContext = trace.getSpan(this.currentFeature.context)
-      featureContext?.end()
+    // End test run span
+    const testRunContext = this.currentTestRun.context
+    if (testRunContext) {
+      const testRunSpan = trace.getSpan(testRunContext)
+      if (testRunSpan) {
+        testRunSpan.setAttributes({
+          'test.status': testRunFinished.success ? 'passed' : 'failed',
+          'test.success': testRunFinished.success
+        })
+        testRunSpan.end()
+      }
     }
 
-    // End test run span
-    const testRunContext = trace.getSpan(this.currentTestRun.context!)
-    testRunContext?.end()
-
     // Output the final test run data
-    const jsonSpacing = 2
-    this.log(JSON.stringify(this.currentTestRun, null, jsonSpacing))
+    this.log(JSON.stringify(this.currentTestRun, null, 2))
     this.log(n)
   }
 
@@ -280,6 +311,10 @@ export default class OtelFormatter extends SummaryFormatter {
       case messages.TestStepResultStatus.FAILED:
         return 'error'
       case messages.TestStepResultStatus.SKIPPED:
+      case messages.TestStepResultStatus.PENDING:
+      case messages.TestStepResultStatus.UNDEFINED:
+      case messages.TestStepResultStatus.AMBIGUOUS:
+      case messages.TestStepResultStatus.UNKNOWN:
         return 'unset'
       default:
         return 'unset'
