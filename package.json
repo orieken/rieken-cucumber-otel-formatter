@@ -1,6 +1,6 @@
 {
   "name": "@orieken/cucumber-otel-formatter",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "OpenTelemetry formatter for CucumberJS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
