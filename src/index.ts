@@ -6,7 +6,7 @@ import {
 import * as messages from '@cucumber/messages'
 import { EOL as n } from 'os'
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { context, Context, trace, Tracer } from '@opentelemetry/api';
+import { context, Context, SpanStatusCode, trace, Tracer } from '@opentelemetry/api';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
@@ -16,6 +16,11 @@ const { GherkinDocumentParser, PickleParser } = formatterHelpers
 const { getGherkinScenarioMap, getGherkinStepMap } =
   GherkinDocumentParser
 const { getPickleStepMap } = PickleParser
+
+type ScenarioStatus = {
+  hasFailedSteps: boolean;
+  error?: string;
+}
 
 class CurrentStep {
   name: string
@@ -85,6 +90,7 @@ export default class OtelFormatter extends SummaryFormatter {
   private currentTestRun: CurrentTestRun = new CurrentTestRun()
   private currentFeature?: CurrentFeature
   private currentScenario?: CurrentScenario
+  private currentScenarioStatus: ScenarioStatus = { hasFailedSteps: false }
   private uri?: string
   private tracer: Tracer
   private provider: NodeTracerProvider
@@ -233,6 +239,24 @@ export default class OtelFormatter extends SummaryFormatter {
       currentStep.status = testStepFinished.testStepResult.status
       currentStep.duration = testStepFinished.testStepResult.duration
 
+      // Track step failure
+      if (testStepFinished.testStepResult.status === TestStepResultStatus.FAILED) {
+        this.currentScenarioStatus.hasFailedSteps = true;
+        this.currentScenarioStatus.error = testStepFinished.testStepResult.message;
+
+        // Mark scenario span as errored immediately when a step fails
+        const scenarioContext = this.currentScenario.context;
+        if (scenarioContext) {
+          const scenarioSpan = trace.getSpan(scenarioContext);
+          if (scenarioSpan) {
+            scenarioSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: testStepFinished.testStepResult.message
+            });
+          }
+        }
+      }
+
       if (testStepFinished.testStepResult.message) {
         currentStep.error = testStepFinished.testStepResult.message
       }
@@ -241,11 +265,21 @@ export default class OtelFormatter extends SummaryFormatter {
       if (currentStep.context) {
         const stepSpan = trace.getSpan(currentStep.context)
         if (stepSpan) {
+          // Set step status
+          const stepStatus = this.mapStatus(testStepFinished.testStepResult.status);
           stepSpan.setAttributes({
-            'test.step.status': this.mapStatus(testStepFinished.testStepResult.status),
+            'test.step.status': stepStatus,
             'test.step.duration.seconds': testStepFinished.testStepResult.duration?.seconds || 0,
             'test.step.error': testStepFinished.testStepResult.message || ''
-          })
+          });
+
+          if (testStepFinished.testStepResult.status === TestStepResultStatus.FAILED) {
+            stepSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: testStepFinished.testStepResult.message
+            });
+          }
+
           stepSpan.end()
         }
       }
@@ -260,7 +294,7 @@ export default class OtelFormatter extends SummaryFormatter {
     if (this.currentScenario) {
       // Update scenario status and duration
       if (testCaseAttempt.stepResults) {
-        this.currentScenario.status = testCaseAttempt.stepResults.status as unknown as messages.TestStepResultStatus;
+        this.currentScenario.status = testCaseAttempt.stepResults.status as unknown as TestStepResultStatus;
         this.currentScenario.duration = testCaseAttempt.stepResults.duration;
       }
 
@@ -269,16 +303,31 @@ export default class OtelFormatter extends SummaryFormatter {
       if (scenarioContext) {
         const scenarioSpan = trace.getSpan(scenarioContext)
         if (scenarioSpan && testCaseAttempt.stepResults) {
+          const scenarioStatus = this.currentScenarioStatus.hasFailedSteps ? 'error' : 'ok';
+
           scenarioSpan.setAttributes({
-            'test.scenario.status': this.mapStatus(testCaseAttempt.worstTestStepResult as unknown as TestStepResultStatus),
+            'test.scenario.status': scenarioStatus,
             'test.scenario.duration.seconds': (testCaseAttempt.stepResults.duration || 0) as unknown as number,
             'test.scenario.name': this.currentScenario.name,
             'test.scenario.file': this.currentScenario.file,
-            'test.scenario.line': this.currentScenario.line
-          })
+            'test.scenario.line': this.currentScenario.line,
+            'test.scenario.has_failed_steps': this.currentScenarioStatus.hasFailedSteps,
+            'test.scenario.error': this.currentScenarioStatus.error || ''
+          });
+
+          if (this.currentScenarioStatus.hasFailedSteps) {
+            scenarioSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: this.currentScenarioStatus.error
+            });
+          }
+
           scenarioSpan.end()
         }
       }
+
+      // Reset scenario status for next scenario
+      this.currentScenarioStatus = { hasFailedSteps: false };
     }
   }
 
